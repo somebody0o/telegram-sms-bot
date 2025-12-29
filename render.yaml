@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: telegram-sms-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: VONAGE_API_KEY
+        value: 0d887cbc
+      - key: VONAGE_API_SECRET
+        value: wLvsSMD3YkHLfxmJ
+      - key: ADMIN_GROUP_ID
+        value: "3614690801"
+      - key: ADMIN_USERNAME
+        value: "@dev_osamh"
+      - key: ENVIRONMENT
+        value: production
+    healthCheckPath: /
+    autoDeploy: true
