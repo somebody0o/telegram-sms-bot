@@ -1,26 +1,17 @@
 FROM php:8.1-alpine
 
-# تثبيت التبعيات المطلوبة
-RUN apk add --no-cache \
-    curl \
-    git \
-    zip \
-    unzip \
-    libzip-dev \
-    && docker-php-ext-install zip
+# تثبيت التبعيات
+RUN apk add --no-cache curl
 
 # إنشاء مجلد التطبيق
 WORKDIR /app
 
-# نسخ ملفات المشروع
+# نسخ الملفات
 COPY . .
 
 # إنشاء مجلدات البيانات
 RUN mkdir -p /app/data/users /app/data/balance \
     && chmod -R 777 /app/data
-
-# تعيين المستخدم المناسب
-USER nobody
 
 # تشغيل التطبيق
 EXPOSE 8080
