@@ -1,0 +1,23 @@
+# بيانات التطبيق
+/data/
+/bot.log
+
+# بيئة التطوير
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# أنظمة التشغيل
+.DS_Store
+Thumbs.db
+
+# محررات الكود
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ملفات مؤقتة
+*.tmp
