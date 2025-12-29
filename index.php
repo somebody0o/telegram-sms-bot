@@ -5,7 +5,7 @@
 // ============================================
 
 // إعدادات البوت - من متغيرات البيئة
-$BOT_TOKEN = getenv('BOT_TOKEN') ?: 'YOUR_BOT_TOKEN_HERE';
+$BOT_TOKEN = getenv('BOT_TOKEN') ?: '8430437491:AAH6rFJTYCC9fHxrv8euLlNVA7jFgzhvg50';
 $VONAGE_API_KEY = getenv('VONAGE_API_KEY') ?: '0d887cbc';
 $VONAGE_API_SECRET = getenv('VONAGE_API_SECRET') ?: 'wLvsSMD3YkHLfxmJ';
 $ADMIN_GROUP_ID = getenv('ADMIN_GROUP_ID') ?: '3614690801';
