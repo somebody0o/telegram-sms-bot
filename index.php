@@ -4,17 +4,18 @@
 // مع نظام أرصدة ولوحة تحكم إدارية
 // ============================================
 
-// إعدادات البوت - استبدل هذه القيم
+// إعدادات البوت - من متغيرات البيئة
 $BOT_TOKEN = getenv('BOT_TOKEN') ?: 'YOUR_BOT_TOKEN_HERE';
-$VONAGE_API_KEY = '0d887cbc';
-$VONAGE_API_SECRET = 'wLvsSMD3YkHLfxmJ';
-$ADMIN_GROUP_ID = '3614690801';
-$ADMIN_USERNAME = '@dev_osamh';
+$VONAGE_API_KEY = getenv('VONAGE_API_KEY') ?: '0d887cbc';
+$VONAGE_API_SECRET = getenv('VONAGE_API_SECRET') ?: 'wLvsSMD3YkHLfxmJ';
+$ADMIN_GROUP_ID = getenv('ADMIN_GROUP_ID') ?: '3614690801';
+$ADMIN_USERNAME = getenv('ADMIN_USERNAME') ?: '@dev_osamh';
 
-// إعدادات المسارات
+// إعدادات المسارات - معدلة للدوكر
 $BASE_DIR = __DIR__ . '/data/';
 $USERS_DIR = $BASE_DIR . 'users/';
 $BALANCE_DIR = $BASE_DIR . 'balance/';
+$LOG_FILE = $BASE_DIR . 'bot.log';
 
 // إنشاء المجلدات إذا لم تكن موجودة
 if (!file_exists($USERS_DIR)) {
@@ -24,39 +25,65 @@ if (!file_exists($BALANCE_DIR)) {
     mkdir($BALANCE_DIR, 0777, true);
 }
 
+// كتابة سجل بدء التشغيل
+logMessage('INFO', 'Bot started at ' . date('Y-m-d H:i:s'));
+
 // ============================================
 // الدوال المساعدة
 // ============================================
 
 /**
+ * تسجيل الرسائل في ملف السجل
+ */
+function logMessage($type, $message) {
+    global $LOG_FILE;
+    $logEntry = '[' . date('Y-m-d H:i:s') . '] [' . $type . '] ' . $message . PHP_EOL;
+    file_put_contents($LOG_FILE, $logEntry, FILE_APPEND);
+}
+
+/**
  * إرسال طلب إلى API تلغرام
  */
-function sendTelegramRequest($method, $parameters = [], $botToken = null) {
+function sendTelegramRequest($method, $parameters = []) {
     global $BOT_TOKEN;
-    $token = $botToken ?: $BOT_TOKEN;
-    $url = "https://api.telegram.org/bot" . $token . "/" . $method;
+    
+    $url = "https://api.telegram.org/bot" . $BOT_TOKEN . "/" . $method;
+    
+    // تحويل المصفوفات إلى JSON إذا لزم الأمر
+    foreach ($parameters as $key => $value) {
+        if (is_array($value)) {
+            $parameters[$key] = json_encode($value);
+        }
+    }
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $parameters);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    
-    // إعدادات إضافية للأمان
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/x-www-form-urlencoded'
+    ]);
     
     $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     
     if (curl_errno($ch)) {
-        error_log('CURL Error: ' . curl_error($ch));
+        $error = curl_error($ch);
         curl_close($ch);
+        logMessage('ERROR', 'Telegram API CURL Error: ' . $error);
         return false;
     }
     
     curl_close($ch);
-    return json_decode($response, true);
+    
+    $decoded = json_decode($response, true);
+    if (!$decoded || !$decoded['ok']) {
+        logMessage('ERROR', 'Telegram API Error: ' . $response);
+    }
+    
+    return $decoded;
 }
 
 /**
@@ -66,15 +93,18 @@ function saveUserData($userId, $userData) {
     global $USERS_DIR;
     $file = $USERS_DIR . $userId . '.json';
     
-    // إضافة timestamp للتحديث
     $userData['last_updated'] = time();
     
-    // كتابة الملف بشكل آمن
     $tempFile = $file . '.tmp';
-    if (file_put_contents($tempFile, json_encode($userData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE))) {
+    $result = file_put_contents($tempFile, json_encode($userData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    
+    if ($result !== false) {
         rename($tempFile, $file);
+        logMessage('INFO', "User data saved: {$userId}");
         return true;
     }
+    
+    logMessage('ERROR', "Failed to save user data: {$userId}");
     return false;
 }
 
@@ -86,14 +116,12 @@ function loadUserData($userId) {
     $file = $USERS_DIR . $userId . '.json';
     
     if (file_exists($file)) {
-        $content = file_get_contents($file);
-        if ($content === false) {
-            return null;
-        }
-        
-        $data = json_decode($content, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            return $data;
+        $content = @file_get_contents($file);
+        if ($content !== false) {
+            $data = json_decode($content, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $data;
+            }
         }
     }
     return null;
@@ -107,8 +135,10 @@ function getUserBalance($userId) {
     $file = $BALANCE_DIR . $userId . '.txt';
     
     if (file_exists($file)) {
-        $balance = file_get_contents($file);
-        return (int)trim($balance);
+        $content = @file_get_contents($file);
+        if ($content !== false) {
+            return (int)trim($content);
+        }
     }
     
     // إذا لم يكن هناك ملف، نبدأ من الصفر
@@ -123,25 +153,19 @@ function updateUserBalance($userId, $amount) {
     global $BALANCE_DIR;
     $file = $BALANCE_DIR . $userId . '.txt';
     
-    // تأكد أن المبلغ صحيح
     $amount = max(0, (int)$amount);
     
-    // كتابة الملف بشكل آمن
     $tempFile = $file . '.tmp';
-    if (file_put_contents($tempFile, $amount)) {
+    $result = file_put_contents($tempFile, $amount);
+    
+    if ($result !== false) {
         rename($tempFile, $file);
+        logMessage('INFO', "Balance updated: {$userId} -> {$amount}");
         return true;
     }
+    
+    logMessage('ERROR', "Failed to update balance: {$userId}");
     return false;
-}
-
-/**
- * زيادة رصيد المستخدم
- */
-function addToUserBalance($userId, $amount) {
-    $current = getUserBalance($userId);
-    $newBalance = $current + (int)$amount;
-    return updateUserBalance($userId, $newBalance);
 }
 
 /**
@@ -161,6 +185,8 @@ function sendSMSviaVonage($to, $text) {
         'type' => 'unicode'
     ];
     
+    logMessage('INFO', "Sending SMS to: {$to}, length: " . strlen($text));
+    
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_POST, true);
@@ -169,20 +195,17 @@ function sendSMSviaVonage($to, $text) {
     curl_setopt($ch, CURLOPT_TIMEOUT, 30);
     
     $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     
     if (curl_errno($ch)) {
-        error_log('Vonage CURL Error: ' . curl_error($ch));
+        $error = curl_error($ch);
         curl_close($ch);
-        return ['error' => 'CURL Error: ' . curl_error($ch)];
+        logMessage('ERROR', 'Vonage CURL Error: ' . $error);
+        return ['error' => $error];
     }
     
     curl_close($ch);
     
-    if ($httpCode !== 200) {
-        return ['error' => "HTTP $httpCode", 'response' => $response];
-    }
-    
+    logMessage('INFO', 'Vonage Response: ' . substr($response, 0, 200));
     return json_decode($response, true);
 }
 
@@ -207,12 +230,20 @@ function notifyAdminNewUser($userId, $username, $firstName, $lastName) {
         ]
     ];
     
-    return sendTelegramRequest('sendMessage', [
+    $result = sendTelegramRequest('sendMessage', [
         'chat_id' => $ADMIN_GROUP_ID,
         'text' => $message,
         'parse_mode' => 'Markdown',
         'reply_markup' => json_encode($keyboard)
     ]);
+    
+    if ($result && $result['ok']) {
+        logMessage('INFO', "Admin notified about new user: {$userId}");
+    } else {
+        logMessage('ERROR', "Failed to notify admin about user: {$userId}");
+    }
+    
+    return $result;
 }
 
 // ============================================
@@ -226,8 +257,8 @@ function processCallbackQuery($callbackQuery) {
     $data = $callbackQuery['data'] ?? '';
     $callbackId = $callbackQuery['id'] ?? '';
     $userId = $callbackQuery['from']['id'] ?? 0;
-    $messageId = $callbackQuery['message']['message_id'] ?? 0;
-    $chatId = $callbackQuery['message']['chat']['id'] ?? 0;
+    
+    logMessage('INFO', "Callback query received: {$data} from user: {$userId}");
     
     // الرد الفوري لمنع تجمد البوت
     sendTelegramRequest('answerCallbackQuery', [
@@ -239,6 +270,8 @@ function processCallbackQuery($callbackQuery) {
         handleRegistration($userId, $callbackQuery['from']);
         
     } elseif (strpos($data, 'charge_') === 0) {
+        $messageId = $callbackQuery['message']['message_id'] ?? 0;
+        $chatId = $callbackQuery['message']['chat']['id'] ?? 0;
         handleBalanceCharge($data, $chatId, $messageId, $callbackQuery['from']);
         
     } elseif ($data === 'send_sms') {
@@ -252,6 +285,9 @@ function processCallbackQuery($callbackQuery) {
         
     } elseif ($data === 'main_menu') {
         showMainMenu($userId);
+        
+    } else {
+        logMessage('WARNING', "Unknown callback data: {$data}");
     }
 }
 
@@ -259,6 +295,8 @@ function processCallbackQuery($callbackQuery) {
  * معالجة تسجيل المستخدم الجديد
  */
 function handleRegistration($userId, $userInfo) {
+    logMessage('INFO', "Processing registration for user: {$userId}");
+    
     // إنشاء بيانات المستخدم
     $userData = [
         'id' => $userId,
@@ -283,12 +321,15 @@ function handleRegistration($userId, $userInfo) {
         // إرسال رسالة ترحيب
         $balance = getUserBalance($userId);
         sendWelcomeMessage($userId, $balance);
+        
+        logMessage('INFO', "User registered successfully: {$userId}");
     } else {
         sendTelegramRequest('sendMessage', [
             'chat_id' => $userId,
             'text' => "❌ حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.",
             'parse_mode' => 'Markdown'
         ]);
+        logMessage('ERROR', "Registration failed for user: {$userId}");
     }
 }
 
@@ -380,6 +421,7 @@ function handleSendSMSRequest($userId) {
             'parse_mode' => 'Markdown',
             'reply_markup' => json_encode($keyboard)
         ]);
+        logMessage('INFO', "User {$userId} has insufficient balance");
         return;
     }
     
@@ -407,6 +449,8 @@ function handleSendSMSRequest($userId) {
         'parse_mode' => 'Markdown',
         'reply_markup' => json_encode($keyboard)
     ]);
+    
+    logMessage('INFO', "User {$userId} started SMS process, balance: {$balance}");
 }
 
 /**
@@ -417,12 +461,14 @@ function handleBalanceCharge($callbackData, $chatId, $messageId, $adminInfo) {
     
     // التحقق من الصلاحية
     if ((string)$chatId !== (string)$ADMIN_GROUP_ID) {
+        logMessage('WARNING', "Unauthorized balance charge attempt from chat: {$chatId}");
         return;
     }
     
     // تحليل البيانات
     $parts = explode('_', $callbackData);
     if (count($parts) !== 3) {
+        logMessage('ERROR', "Invalid charge data format: {$callbackData}");
         return;
     }
     
@@ -430,8 +476,11 @@ function handleBalanceCharge($callbackData, $chatId, $messageId, $adminInfo) {
     $amount = (int)$parts[2];
     
     if ($amount <= 0) {
+        logMessage('ERROR', "Invalid charge amount: {$amount}");
         return;
     }
+    
+    logMessage('INFO', "Processing charge: {$amount} messages to user {$targetUserId} by admin {$adminInfo['id']}");
     
     // شحن الرصيد
     $currentBalance = getUserBalance($targetUserId);
@@ -463,6 +512,10 @@ function handleBalanceCharge($callbackData, $chatId, $messageId, $adminInfo) {
             'text' => $userMessage,
             'parse_mode' => 'Markdown'
         ]);
+        
+        logMessage('INFO', "Balance charged successfully: {$targetUserId} +{$amount} = {$newBalance}");
+    } else {
+        logMessage('ERROR', "Failed to charge balance: {$targetUserId}");
     }
 }
 
@@ -491,6 +544,8 @@ function handleBuyCredit($userId) {
         'parse_mode' => 'Markdown',
         'reply_markup' => json_encode($keyboard)
     ]);
+    
+    logMessage('INFO', "User {$userId} requested to buy credit");
 }
 
 /**
@@ -526,6 +581,8 @@ function handleCheckBalance($userId) {
         'parse_mode' => 'Markdown',
         'reply_markup' => json_encode($keyboard)
     ]);
+    
+    logMessage('INFO', "User {$userId} checked balance: {$balance}");
 }
 
 // ============================================
@@ -540,8 +597,10 @@ function processTextMessage($message) {
     $text = $message['text'] ?? '';
     $chatId = $message['chat']['id'] ?? 0;
     
+    logMessage('INFO', "Text message from {$userId}: " . substr($text, 0, 100));
+    
     // تجاهل الرسائل الفارغة
-    if (empty($text)) {
+    if (empty(trim($text))) {
         return;
     }
     
@@ -559,6 +618,7 @@ function processTextMessage($message) {
             'text' => "⚠️ يرجى التسجيل أولاً باستخدام الأمر /start",
             'parse_mode' => 'Markdown'
         ]);
+        logMessage('WARNING', "Unregistered user {$userId} tried to send message");
         return;
     }
     
@@ -576,6 +636,8 @@ function processTextMessage($message) {
  * معالجة أمر /start
  */
 function handleStartCommand($userId, $chatId, $userInfo) {
+    logMessage('INFO', "Start command from user {$userId}");
+    
     $userData = loadUserData($userId);
     
     if ($userData && ($userData['status'] ?? '') === 'active') {
@@ -649,6 +711,7 @@ function handleUserState($userId, $chatId, $text, $userData) {
             $userData['state'] = '';
             saveUserData($userId, $userData);
             showMainMenu($userId);
+            logMessage('WARNING', "Unknown user state reset for user {$userId}");
     }
 }
 
@@ -657,6 +720,8 @@ function handleUserState($userId, $chatId, $text, $userData) {
  */
 function handlePhoneInput($userId, $chatId, $text, $userData) {
     $phone = trim($text);
+    
+    logMessage('INFO', "User {$userId} entered phone: {$phone}");
     
     // التحقق من صيغة الرقم
     if (!preg_match('/^\+[1-9]\d{1,14}$/', $phone)) {
@@ -687,6 +752,8 @@ function handleMessageInput($userId, $chatId, $text, $userData) {
     $messageText = trim($text);
     $phoneNumber = $userData['temp_phone'] ?? '';
     
+    logMessage('INFO', "User {$userId} entered message for {$phoneNumber}, length: " . strlen($messageText));
+    
     if (empty($messageText)) {
         sendTelegramRequest('sendMessage', [
             'chat_id' => $chatId,
@@ -708,6 +775,7 @@ function handleMessageInput($userId, $chatId, $text, $userData) {
             'text' => "❌ عفواً، نفذ رصيدك أثناء العملية\nيرجى شحن الرصيد أولاً.",
             'parse_mode' => 'Markdown'
         ]);
+        logMessage('WARNING', "User {$userId} ran out of balance during SMS process");
         return;
     }
     
@@ -753,11 +821,14 @@ function handleMessageInput($userId, $chatId, $text, $userData) {
             'parse_mode' => 'Markdown',
             'reply_markup' => json_encode($keyboard)
         ]);
+        
+        logMessage('INFO', "SMS sent successfully: {$userId} to {$phoneNumber}, new balance: {$newBalance}");
     } else {
         // فشل الإرسال
+        $error = $result['messages'][0]['error-text'] ?? $result['error'] ?? 'غير معروف';
         $errorMessage = "❌ *فشل إرسال الرسالة*\n\n";
         $errorMessage .= "📱 إلى: `" . $phoneNumber . "`\n";
-        $errorMessage .= "سبب الخطأ: " . ($result['messages'][0]['error-text'] ?? $result['error'] ?? 'غير معروف') . "\n\n";
+        $errorMessage .= "سبب الخطأ: " . $error . "\n\n";
         $errorMessage .= "يرجى المحاولة مرة أخرى.";
         
         $keyboard = [
@@ -775,6 +846,8 @@ function handleMessageInput($userId, $chatId, $text, $userData) {
             'parse_mode' => 'Markdown',
             'reply_markup' => json_encode($keyboard)
         ]);
+        
+        logMessage('ERROR', "SMS failed: {$userId} to {$phoneNumber}, error: {$error}");
     }
 }
 
@@ -782,18 +855,54 @@ function handleMessageInput($userId, $chatId, $text, $userData) {
 // نقطة الدخول الرئيسية (Webhook Handler)
 // ============================================
 
+// تمكين عرض الأخطاء للتطوير
+if (getenv('ENVIRONMENT') === 'development') {
+    error_reporting(E_ALL);
+    ini_set('display_errors', 1);
+} else {
+    error_reporting(0);
+    ini_set('display_errors', 0);
+}
+
 // استقبال البيانات من Telegram
-$input = file_get_contents('php://input');
+$input = @file_get_contents('php://input');
+
+if ($input === false || empty($input)) {
+    // إذا لم تكن هناك بيانات، قد يكون طلب اختبار من Render
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        echo "✅ Telegram SMS Bot is running!\n";
+        echo "📅 Server Time: " . date('Y-m-d H:i:s') . "\n";
+        echo "🐳 Running in Docker\n";
+        echo "📁 Data Directory: " . __DIR__ . "/data/\n";
+        exit;
+    }
+    
+    http_response_code(400);
+    echo "No input data";
+    logMessage('ERROR', 'No input data received');
+    exit;
+}
+
 $update = json_decode($input, true);
 
-// تسجيل للتصحيح (يمكن إزالته في الإنتاج)
-file_put_contents('log.txt', date('Y-m-d H:i:s') . " - " . $input . "\n\n", FILE_APPEND);
+if ($update === null) {
+    http_response_code(400);
+    echo "Invalid JSON";
+    logMessage('ERROR', 'Invalid JSON received: ' . $input);
+    exit;
+}
 
 // معالجة البيانات الواردة
-if (isset($update['callback_query'])) {
-    processCallbackQuery($update['callback_query']);
-} elseif (isset($update['message'])) {
-    processTextMessage($update['message']);
+try {
+    if (isset($update['callback_query'])) {
+        processCallbackQuery($update['callback_query']);
+    } elseif (isset($update['message'])) {
+        processTextMessage($update['message']);
+    } else {
+        logMessage('WARNING', 'Unknown update type received');
+    }
+} catch (Exception $e) {
+    logMessage('ERROR', 'Exception: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
 }
 
 // الرد بـ OK
